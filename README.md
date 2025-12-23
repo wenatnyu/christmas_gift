@@ -14,7 +14,7 @@ Two-phase wishes site (send/receive) with a backend-controlled jump time.
    npm start
    ```
 
-The server auto-creates Postgres tables on startup.
+The server auto-creates Postgres tables on startup. If `DATABASE_URL` is not set, it falls back to a non-persistent in-memory store so you can still run the app locally (data resets on restart).
 
 ## Deploy to Railway (GitHub)
 

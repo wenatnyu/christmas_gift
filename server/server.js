@@ -15,8 +15,69 @@ let shanghaiFormatter = null;
 let jumpTimeOverride = null;
 let jumpTimestampOverride = null;
 
-if (!DATABASE_URL) {
-  throw new Error('DATABASE_URL is required');
+function createMemoryPool() {
+  // Simple, non-persistent in-memory store for local/dev usage.
+  const wishes = [];
+  const settings = {};
+
+  return {
+    async query(text, params = []) {
+      const normalized = text.replace(/\s+/g, ' ').trim().toLowerCase();
+
+      if (normalized.startsWith('create table')) {
+        return { rows: [] };
+      }
+
+      if (normalized.startsWith('select value from settings where key')) {
+        const key = params[0];
+        return settings[key] ? { rows: [{ value: settings[key] }] } : { rows: [] };
+      }
+
+      if (normalized.startsWith('insert into settings')) {
+        const [key, value] = params;
+        settings[key] = value;
+        return { rows: [] };
+      }
+
+      if (normalized.startsWith('delete from settings where key')) {
+        const key = params[0];
+        delete settings[key];
+        return { rows: [] };
+      }
+
+      if (normalized.startsWith('select count(*)::int as count from wishes')) {
+        return { rows: [{ count: wishes.length }] };
+      }
+
+      if (normalized.startsWith('select message, name, country from wishes order by random() limit')) {
+        const requested = Number.parseInt(params[0], 10);
+        const limit = Number.isFinite(requested) && requested > 0 ? requested : 12;
+        const shuffled = [...wishes];
+        for (let i = shuffled.length - 1; i > 0; i -= 1) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+        }
+        return {
+          rows: shuffled.slice(0, limit).map(({ message, name, country }) => ({
+            message,
+            name,
+            country
+          }))
+        };
+      }
+
+      if (normalized.startsWith('insert into wishes')) {
+        const [message, name, country] = params;
+        wishes.push({ message, name, country });
+        return { rows: [] };
+      }
+
+      throw new Error(`Unsupported in-memory query: ${text}`);
+    },
+    on() {
+      // No-op for in-memory pool to mirror pg.Pool API.
+    }
+  };
 }
 
 function getSslConfig() {
@@ -30,14 +91,21 @@ function getSslConfig() {
   return needsSsl ? { rejectUnauthorized: false } : false;
 }
 
-const pool = new Pool({
-  connectionString: DATABASE_URL,
-  ssl: getSslConfig()
-});
+const usingMemoryStore = !DATABASE_URL;
+const pool = usingMemoryStore
+  ? createMemoryPool()
+  : new Pool({
+      connectionString: DATABASE_URL,
+      ssl: getSslConfig()
+    });
 
-pool.on('error', (err) => {
-  console.error('Unexpected database error:', err);
-});
+if (usingMemoryStore) {
+  console.warn('DATABASE_URL not set. Using in-memory store (data resets on restart).');
+} else {
+  pool.on('error', (err) => {
+    console.error('Unexpected database error:', err);
+  });
+}
 
 try {
   shanghaiFormatter = new Intl.DateTimeFormat('en-CA', {
